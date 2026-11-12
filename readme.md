@@ -36,7 +36,7 @@ saved with the active plugin list.
 
 ### Voicemeeter
 
-On Windows, to insert effects into a Voicemeeter Banana input strip, use
+On Windows, to insert effects into a Voicemeeter input strip, use
 **Voicemeeter Virtual Insert ASIO** rather than a Windows playback or recording
 endpoint:
 
@@ -52,7 +52,7 @@ endpoint:
    each matching channel. The independent mode is capped at eight channels;
    it does not automatically follow Voicemeeter's insert buttons.
 4. In Voicemeeter's **Menu > System Settings / Options > Patch Insert**, enable
-   the left and right insert returns for that strip. The small `i` indicator on
+   the left and right insert returns for that strip. The small `i>` indicator on
    the strip also controls its insert return. The signal returns to that strip
    before its fader and its A1/A2/A3/B1/B2 routing.
 5. Add effects in Light Host and check the signal at low volume. If the insert is
@@ -90,11 +90,7 @@ otherwise pass `-DJUCE_DIR=<path to JUCE>`.
 ```
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --target LightHost
-```
-
-For the audio routing regression test, configure with
-`-DLIGHTHOST_BUILD_TESTS=ON`, build the `LightHostRoutingTest` target, then run
-`ctest --test-dir build -C Release --output-on-failure`.
+```.
 
 The app is written to `build\LightHost_artefacts\Release\Light Host.exe`.
 `LightHost.jucer` is the legacy JUCE 4 project and is no longer used for building.
@@ -102,6 +98,11 @@ The main Light Host window stays open while you manage plugins. Closing it hides
 the window; reopen it from the tray menu, or quit from the tray icon.
 
 ### VST2 plugins
+
+> #### NOTE from human:
+> I had the AI build and create a VST2.0 sdk. If there are issues, please let
+> me know with as much information/logs as possible. If you need help with this
+> I can guide you, just make sure to add these to an issue.
 
 Use **Edit Plugins** to scan the folder containing your VST2 `.dll` files, then
 add an effect from the plugin list. The bundled GPL-licensed compatibility
@@ -175,32 +176,13 @@ or upgrades the app in the current user's local application data and creates a
 Start menu shortcut. Close all Light Host instances before upgrading. Existing
 plugin settings are not removed.
 
-On Windows, Light Host checks `https://annaspannertechsolutions.uk/lighthost/latest`
+On Windows, Light Host checks `https://annaspannertechsolutions.uk/lighthost/latest` (my personal server)
 at startup; the tray menu also has **Check for updates**. It asks before
 downloading from GitHub Releases and again before running the installer. The
 installer is checked against the manifest's SHA-256 hash and launched with the
 current application's install directory, so an installation made outside the
 default location is updated in place. Automatic updates on macOS and Linux are
 not implemented.
-
-The server endpoint and manifest must be deployed before this works. For a
-release, upload the installer to the `Anna-Spanner/LightHost` GitHub release,
-calculate its SHA-256 (for example with `Get-FileHash -Algorithm SHA256`), and
-update the server's `lighthost_latest.json`. The version must be three numeric
-components, and each asset filename and tag may contain letters, numbers,
-periods, underscores, and hyphens:
-
-```json
-{
-  "version": "1.2.3",
-  "assets": {
-    "windows-x64": {
-      "url": "https://github.com/Anna-Spanner/LightHost/releases/download/v1.2.3/LightHostSetup-x64.exe",
-      "sha256": "<64 hexadecimal SHA-256 characters>"
-    }
-  }
-}
-```
 
 Use `windows-arm64` for an ARM64 installer. A release must have an asset for the
 running architecture; no installers have yet been published or signed.
