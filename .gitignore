@@ -1,3 +1,11 @@
 Builds/
 JuceLibraryCode/
 lib/
+build/
+build-arm64/
+.vs/
+.vscode/
+.github/workflows
+CMakeUserPresets.json
+Tests/
+Utilities/
