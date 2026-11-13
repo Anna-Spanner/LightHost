@@ -122,11 +122,13 @@ The active plugin list is processed from top to bottom. Use **Move up** and
 The same plugin can be added more than once; each instance has its own saved
 state and bypass setting. Existing saved chains are migrated on first launch.
 
-On Windows, **Bypass shortcut...** configures an optional global shortcut for
-the selected plugin. It works while another application is focused; leave the
-field empty to disable it. Windows reports an error if another application
-already uses the combination. On macOS and Linux, the shortcut currently works
-only while the Light Host window is focused.
+**Bypass shortcut...** configures a shortcut for the selected plugin. On
+Windows and macOS it is registered with the operating system. On Linux it is
+global in X11 sessions; Wayland does not provide this X11 app a portable global
+shortcut registration API, so the shortcut falls back to working only while
+the Light Host window is focused. Leave the field empty to disable it. The app
+reports when the global combination cannot be registered because it is already
+in use or the desktop does not support it.
 
 If a saved plugin cannot load, Light Host reports the reason and keeps its saved
 state. Reinstall missing plugins at their original locations, or scan for them
@@ -163,9 +165,14 @@ show a diagnostic stack at the reporting point. This is not necessarily the
 original failure location; release builds may lack symbols. Native crashes and
 failures in plugin threads cannot be guaranteed to show a popup.
 
-### Windows installer and updates
+### Installer and updates
 
-Build the installer after building the application:
+Light Host checks `https://annaspannertechsolutions.uk/lighthost/latest` at
+startup; the tray menu also has **Check for updates**. It compares semantic
+versions, downloads the platform-specific GitHub Release asset, verifies its
+SHA-256 against the manifest, and asks before installing.
+
+On Windows, build the installer after building the application:
 
 ```
 cmake --build build --config Release --target LightHostSetup
@@ -173,16 +180,24 @@ cmake --build build --config Release --target LightHostSetup
 
 The self-contained installer is `build\Release\Light Host Setup.exe`. It installs
 or upgrades the app in the current user's local application data and creates a
-Start menu shortcut. Close all Light Host instances before upgrading. Existing
-plugin settings are not removed.
+Start menu shortcut. The updater runs this installer with the current
+application directory, so an installation outside the default location is
+updated in place. Existing plugin settings are not removed.
 
-On Windows, Light Host checks `https://annaspannertechsolutions.uk/lighthost/latest` (my personal server)
-at startup; the tray menu also has **Check for updates**. It asks before
-downloading from GitHub Releases and again before running the installer. The
-installer is checked against the manifest's SHA-256 hash and launched with the
-current application's install directory, so an installation made outside the
-default location is updated in place. Automatic updates on macOS and Linux are
-not implemented.
+On Linux, the release asset is the app executable. The updater installs it
+beside the running executable, then closes and restarts Light Host. The app
+directory must be writable by the current user; system-wide installations
+requiring administrator permissions are not updated automatically. The Linux
+release archive must include `LightHostUpdater` beside `Light Host`.
 
-Use `windows-arm64` for an ARM64 installer. A release must have an asset for the
-running architecture; no installers have yet been published or signed.
+On macOS, the release asset is a ZIP containing `Light Host.app`. The updater
+replaces the app bundle and reopens it; the installed bundle location must be
+writable by the current user. Unsigned or unnotarized app bundles may be blocked
+by Gatekeeper. This project does not currently sign or notarize macOS builds. 
+
+> *Human note:* Please raise an issue if you are interested in me getting this signed
+
+The manifest must contain a URL and SHA-256 for the running architecture:
+`windows-x64`, `windows-arm64`, `linux-x64`, `linux-arm64`, `macos-x64`, or
+`macos-arm64`. Updates are not offered until a newer version and matching
+platform asset are published.

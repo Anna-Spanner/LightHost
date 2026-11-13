@@ -44,6 +44,8 @@ juce_generate_juce_header(LightHost)
 
 target_sources(LightHost PRIVATE
     Source/ErrorReporting.hpp
+    Source/GlobalBypassShortcut.cpp
+    Source/GlobalBypassShortcut.hpp
     Source/HostStartup.cpp
     Source/IconMenu.cpp
     Source/PluginChannelRouting.hpp
@@ -75,8 +77,20 @@ if(LIGHTHOST_BUILD_TESTS)
 endif()
 if(APPLE)
     target_compile_definitions(LightHost PRIVATE JUCE_PLUGINHOST_AU=1)
+    target_link_libraries(LightHost PRIVATE "-framework Carbon")
+    add_executable(LightHostUpdater Installer/UpdateHelper.cpp)
 elseif(UNIX)
     target_compile_definitions(LightHost PRIVATE JUCE_PLUGINHOST_LV2=1)
+    find_package(X11 REQUIRED)
+    target_link_libraries(LightHost PRIVATE X11::X11)
+    add_executable(LightHostUpdater Installer/UpdateHelper.cpp)
+endif()
+if(UNIX)
+    add_dependencies(LightHost LightHostUpdater)
+    add_custom_command(TARGET LightHost POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_FILE:LightHostUpdater>" "$<TARGET_FILE_DIR:LightHost>/LightHostUpdater"
+        VERBATIM)
 endif()
 
 target_include_directories(LightHost PRIVATE "${VST2_SDK_DIR}")

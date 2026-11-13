@@ -14,124 +14,18 @@
 #include "PluginChannelRouting.hpp"
 #include "StereoRouting.hpp"
 #include "UpdateManifestValidation.hpp"
+#include "GlobalBypassShortcut.hpp"
 #include <algorithm>
 #include <utility>
-#if JUCE_WINDOWS
-#include "Windows.h"
-
-namespace
-{
-class GlobalBypassShortcut
-{
-public:
-    explicit GlobalBypassShortcut (std::function<void()> callbackIn) : callback (std::move (callbackIn))
-    {
-        const auto instance = GetModuleHandleW (nullptr);
-        WNDCLASSW windowClass {};
-        windowClass.lpfnWndProc = windowProc;
-        windowClass.hInstance = instance;
-        windowClass.lpszClassName = L"LightHostGlobalBypassShortcut";
-        if (RegisterClassW (&windowClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
-            return;
-        window = CreateWindowExW (0, windowClass.lpszClassName, L"", 0, 0, 0, 0, 0,
-                                  HWND_MESSAGE, nullptr, instance, this);
-    }
-
-    ~GlobalBypassShortcut()
-    {
-        if (window != nullptr)
-        {
-            if (registeredId != 0)
-                UnregisterHotKey (window, registeredId);
-            DestroyWindow (window);
-        }
-    }
-
-    String setShortcut (const String& description)
-    {
-        if (description.trim().isEmpty())
-        {
-            if (registeredId != 0)
-                UnregisterHotKey (window, registeredId);
-            registeredId = 0;
-            registeredModifiers = registeredKey = 0;
-            return {};
-        }
-        if (window == nullptr)
-            return "Windows could not create the global shortcut listener.";
-
-        StringArray parts;
-        parts.addTokens (description, "+", "");
-        parts.trim();
-        if (parts.size() < 2)
-            return "Use a modifier and a letter, number or function key, for example ctrl + b.";
-
-        UINT modifiers = MOD_NOREPEAT;
-        for (int i = 0; i < parts.size() - 1; ++i)
-        {
-            UINT flag = 0;
-            if (parts[i].equalsIgnoreCase ("ctrl")) flag = MOD_CONTROL;
-            else if (parts[i].equalsIgnoreCase ("alt")) flag = MOD_ALT;
-            else if (parts[i].equalsIgnoreCase ("shift")) flag = MOD_SHIFT;
-            else if (parts[i].equalsIgnoreCase ("win")) flag = MOD_WIN;
-            if (flag == 0 || (modifiers & flag) != 0)
-                return "Use ctrl, alt, shift or win once each before the key.";
-            modifiers |= flag;
-        }
-
-        const auto text = parts[parts.size() - 1].toUpperCase();
-        UINT key = 0;
-        if (text.length() == 1 && ((text[0] >= 'A' && text[0] <= 'Z')
-                                   || (text[0] >= '0' && text[0] <= '9')))
-            key = (UINT) text[0];
-        else if (text.startsWithChar ('F'))
-        {
-            for (int i = 1; i <= 24; ++i)
-                if (text == "F" + String (i))
-                    key = VK_F1 + (UINT) i - 1;
-        }
-        if (key == 0)
-            return "The key must be a letter, number or F1 through F24.";
-        if (registeredId != 0 && modifiers == registeredModifiers && key == registeredKey)
-            return {};
-
-        const int nextId = registeredId == 1 ? 2 : 1;
-        if (! RegisterHotKey (window, nextId, modifiers, key))
-            return "Windows could not register this global shortcut. It may already be in use.";
-        if (registeredId != 0)
-            UnregisterHotKey (window, registeredId);
-        registeredId = nextId;
-        registeredModifiers = modifiers;
-        registeredKey = key;
-        return {};
-    }
-
-private:
-    static LRESULT CALLBACK windowProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-    {
-        if (message == WM_NCCREATE)
-        {
-            const auto* create = reinterpret_cast<const CREATESTRUCTW*> (lParam);
-            SetWindowLongPtrW (hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR> (create->lpCreateParams));
-        }
-        auto* self = reinterpret_cast<GlobalBypassShortcut*> (GetWindowLongPtrW (hwnd, GWLP_USERDATA));
-        if (self != nullptr && message == WM_HOTKEY && (int) wParam == self->registeredId)
-        {
-            self->callback();
-            return 0;
-        }
-        return DefWindowProcW (hwnd, message, wParam, lParam);
-    }
-
-    std::function<void()> callback;
-    HWND window = nullptr;
-    int registeredId = 0;
-    UINT registeredModifiers = 0, registeredKey = 0;
-};
-}
+#if ! JUCE_WINDOWS
+#include <spawn.h>
+#include <string>
+#include <unistd.h>
+extern char** environ;
+#else
+#include <Windows.h>
 #endif
 
-#if JUCE_WINDOWS
 namespace
 {
 struct UpdateDownload
@@ -175,8 +69,58 @@ UpdateDownload readUpdateUrl (const String& url, size_t limit)
     return result;
 }
 
+String currentUpdatePlatform()
+{
+#if JUCE_WINDOWS
+    #if defined(_M_ARM64) || defined(__aarch64__)
+    return "windows-arm64";
+    #else
+    return "windows-x64";
+    #endif
+#elif JUCE_MAC
+    #if defined(__arm64__) || defined(__aarch64__)
+    return "macos-arm64";
+    #else
+    return "macos-x64";
+    #endif
+#elif JUCE_LINUX
+    #if defined(__aarch64__)
+    return "linux-arm64";
+    #else
+    return "linux-x64";
+    #endif
+#else
+    return {};
+#endif
+}
+
+File updateStatusFile()
+{
+    return File::getSpecialLocation (File::userApplicationDataDirectory)
+        .getChildFile ("Light Host").getChildFile ("update-status.txt");
+}
+
+#if ! JUCE_WINDOWS
+bool launchUpdateHelper (const File& helper, const std::vector<String>& arguments)
+{
+    std::vector<std::string> ownedArguments;
+    ownedArguments.reserve (arguments.size() + 1);
+    ownedArguments.push_back (helper.getFullPathName().toStdString());
+    for (const auto& argument : arguments)
+        ownedArguments.push_back (argument.toStdString());
+
+    std::vector<char*> argv;
+    argv.reserve (ownedArguments.size() + 1);
+    for (auto& argument : ownedArguments)
+        argv.push_back (argument.data());
+    argv.push_back (nullptr);
+
+    pid_t child = 0;
+    return posix_spawn (&child, argv[0], nullptr, nullptr, argv.data(), environ) == 0;
 }
 #endif
+
+}
 
 namespace
 {
@@ -290,8 +234,11 @@ public:
         setContentOwned (panel, true);
         centreWithSize (500, 485);
         setVisible (true);
+        #if JUCE_LINUX
+        startTimer (50);
+        #else
         startTimer (500);
-        #if JUCE_WINDOWS
+        #endif
         globalShortcut = std::make_unique<GlobalBypassShortcut> ([this]
         {
             if (! isPositiveAndBelow (list.getSelectedRow(), getNumRows()))
@@ -302,11 +249,16 @@ public:
             }
             perform (2);
         });
-        const auto error = globalShortcut->setShortcut (
-            getAppProperties().getUserSettings()->getValue ("bypassShortcut"));
+        #if JUCE_WINDOWS
+        const auto defaultShortcut = String();
+        #else
+        const auto defaultShortcut = String ("ctrl + b");
+        #endif
+        const auto shortcut = getAppProperties().getUserSettings()->getValue ("bypassShortcut", defaultShortcut);
+        const auto error = globalShortcut->setShortcut (shortcut);
+        globalShortcutAvailable = shortcut.trim().isNotEmpty() && error.isEmpty();
         if (error.isNotEmpty())
             showErrorWithDiagnostics ("Global bypass shortcut unavailable", error);
-        #endif
     }
 
     void closeButtonPressed() override { setVisible (false); }
@@ -316,14 +268,20 @@ private:
 
     bool keyPressed (const KeyPress& key) override
     {
-        #if ! JUCE_WINDOWS
-        const auto description = getAppProperties().getUserSettings()->getValue ("bypassShortcut", "ctrl + b");
-        if (key == KeyPress::createFromDescription (description))
+        if (! globalShortcutAvailable)
         {
-            perform (2);
-            return true;
+            #if JUCE_WINDOWS
+            const auto shortcutDefault = String();
+            #else
+            const auto shortcutDefault = String ("ctrl + b");
+            #endif
+            const auto description = getAppProperties().getUserSettings()->getValue ("bypassShortcut", shortcutDefault);
+            if (key == KeyPress::createFromDescription (description))
+            {
+                perform (2);
+                return true;
+            }
         }
-        #endif
         return DocumentWindow::keyPressed (key);
     }
 
@@ -355,6 +313,13 @@ private:
 
     void timerCallback() override
     {
+        globalShortcut->poll();
+        #if JUCE_LINUX
+        const auto now = Time::getMillisecondCounter();
+        if (now - lastRefreshTime < 500)
+            return;
+        lastRefreshTime = now;
+        #endif
         list.updateContent();
         list.repaint();
         updateLatency();
@@ -375,47 +340,33 @@ private:
     {
         if (action == 9)
         {
-            #if JUCE_WINDOWS
             const String shortcutHelp = "Enter a combination such as ctrl + alt + b, or leave it empty to disable it. "
                                         "The global shortcut toggles the selected plugin even when another window is focused.";
-            #else
-            const String shortcutHelp = "Enter a key combination, such as ctrl + b. "
-                                        "The shortcut toggles the selected plugin while this window is focused.";
-            #endif
             AlertWindow dialog ("Bypass shortcut",
                                 shortcutHelp,
                                 MessageBoxIconType::NoIcon);
             #if JUCE_WINDOWS
-            dialog.addTextEditor ("shortcut", getAppProperties().getUserSettings()->getValue ("bypassShortcut"));
+            const auto shortcutDefault = String();
             #else
-            dialog.addTextEditor ("shortcut", getAppProperties().getUserSettings()->getValue ("bypassShortcut", "ctrl + b"));
+            const auto shortcutDefault = String ("ctrl + b");
             #endif
+            dialog.addTextEditor ("shortcut", getAppProperties().getUserSettings()->getValue (
+                "bypassShortcut", shortcutDefault));
             dialog.addButton ("Save", 1, KeyPress (KeyPress::returnKey));
             dialog.addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
             if (dialog.runModalLoop() == 1)
             {
                 const auto text = dialog.getTextEditorContents ("shortcut").trim();
-                #if JUCE_WINDOWS
                 const auto error = globalShortcut->setShortcut (text);
                 if (error.isNotEmpty())
                     showErrorWithDiagnostics ("Invalid or unavailable shortcut", error);
                 else
                 {
+                    globalShortcutAvailable = text.isNotEmpty();
                     getAppProperties().getUserSettings()->setValue ("bypassShortcut", text);
                     if (! getAppProperties().saveIfNeeded())
                         showErrorWithDiagnostics ("Could not save shortcut", "The shortcut could not be saved.");
                 }
-                #else
-                const auto key = KeyPress::createFromDescription (text);
-                if (! key.isValid())
-                    showErrorWithDiagnostics ("Invalid shortcut", "Enter a valid key combination, such as ctrl + b.");
-                else
-                {
-                    getAppProperties().getUserSettings()->setValue ("bypassShortcut", key.getTextDescription());
-                    if (! getAppProperties().saveIfNeeded())
-                        showErrorWithDiagnostics ("Could not save shortcut", "The shortcut could not be saved.");
-                }
-                #endif
             }
             return;
         }
@@ -471,9 +422,9 @@ private:
     Label latency;
     Label routingLabel;
     ComboBox routing;
-    #if JUCE_WINDOWS
     std::unique_ptr<GlobalBypassShortcut> globalShortcut;
-    #endif
+    bool globalShortcutAvailable = false;
+    uint32 lastRefreshTime = 0;
 };
 
 IconMenu::IconMenu() : INDEX_EDIT(1000000), INDEX_BYPASS(2000000), INDEX_DELETE(3000000), INDEX_MOVE_UP(4000000), INDEX_MOVE_DOWN(5000000)
@@ -535,9 +486,16 @@ IconMenu::IconMenu() : INDEX_EDIT(1000000), INDEX_BYPASS(2000000), INDEX_DELETE(
 	setIcon();
 	setIconTooltip(JUCEApplication::getInstance()->getApplicationName());
     showMainWindow();
-    #if JUCE_WINDOWS
+    const auto previousUpdateStatus = updateStatusFile();
+    if (previousUpdateStatus.existsAsFile())
+    {
+        auto message = previousUpdateStatus.loadFileAsString().trim();
+        if (! previousUpdateStatus.deleteFile())
+            message << "\nCould not remove the update status file: " << previousUpdateStatus.getFullPathName();
+        if (message.isNotEmpty())
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, "Light Host update", message);
+    }
     checkForUpdates (false);
-    #endif
 };
 
 IconMenu::~IconMenu()
@@ -787,9 +745,7 @@ void IconMenu::timerCallback()
     menu.addSectionHeader(JUCEApplication::getInstance()->getApplicationName());
     if (menuIconLeftClicked) {
         menu.addItem(4, "Open Light Host window");
-        #if JUCE_WINDOWS
         menu.addItem(5, "Check for updates");
-        #endif
         menu.addItem(1, "Preferences");
         menu.addItem(2, "Edit Plugins");
         menu.addSeparator();
@@ -891,13 +847,11 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
         im->showMainWindow();
         return;
     }
-    #if JUCE_WINDOWS
     if (id == 5)
     {
         im->checkForUpdates (true);
         return;
     }
-    #endif
     const bool pluginMenuCommand = (id >= im->INDEX_EDIT && id < 7000000)
                                 || KnownPluginList::getIndexChosenByMenu (im->knownPluginList.getTypes(), id) > -1;
     if (pluginMenuCommand && ! im->activeChainValid)
@@ -1598,7 +1552,6 @@ void IconMenu::addPluginFile()
         });
 }
 
-#if JUCE_WINDOWS
 void IconMenu::checkForUpdates (bool manual)
 {
     if (updateInProgress)
@@ -1642,17 +1595,13 @@ void IconMenu::checkForUpdates (bool manual)
                                                       "You have the latest available version.");
                 return;
             }
-            #if defined(_M_ARM64) || defined(__aarch64__)
-            const String platform = "windows-arm64";
-            #else
-            const String platform = "windows-x64";
-            #endif
+            const String platform = currentUpdatePlatform();
             const auto assets = json.getProperty ("assets", {});
             const auto asset = assets.getProperty (platform, {});
             const String address = asset.getProperty ("url", {}).toString();
             const String hash = asset.getProperty ("sha256", {}).toString();
             if (! assets.isObject() || ! asset.isObject()
-                || ! isValidLightHostInstallerUrl (address) || ! isValidLightHostSha256 (hash))
+                || ! isValidLightHostReleaseAssetUrl (address) || ! isValidLightHostSha256 (hash))
             {
                 if (manual)
                     showErrorWithDiagnostics ("Update unavailable",
@@ -1662,7 +1611,7 @@ void IconMenu::checkForUpdates (bool manual)
             AlertWindow::showAsync (MessageBoxOptions()
                 .withIconType (MessageBoxIconType::QuestionIcon)
                 .withTitle ("Light Host update available")
-                .withMessage ("Version " + latest + " is available. Download its installer from GitHub?")
+                .withMessage ("Version " + latest + " is available. Download the verified update from GitHub?")
                 .withButton ("Download", 1).withButton ("Not now", 0),
                 [safeThis, address, hash, latest] (int result)
                 {
@@ -1687,27 +1636,36 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
     }
     updateInProgress = true;
     Component::SafePointer<IconMenu> safeThis (this);
-    if (! Thread::launch ([safeThis, url, sha256, version]
+    const auto platform = currentUpdatePlatform();
+    if (! Thread::launch ([safeThis, url, sha256, version, platform]
     {
-        auto response = readUpdateUrl (url, 256u * 1024u * 1024u);
+        auto response = readUpdateUrl (url, 512u * 1024u * 1024u);
         if (response.error.isEmpty() && ! SHA256 (response.data).toHexString().equalsIgnoreCase (sha256))
-            response.error = "The downloaded installer's SHA-256 does not match the update manifest.";
-        File installer;
+            response.error = "The downloaded update's SHA-256 does not match the update manifest.";
+        File updateFile;
         if (response.error.isEmpty())
         {
-            installer = File::getSpecialLocation (File::tempDirectory)
-                            .getNonexistentChildFile ("LightHostSetup", ".exe");
-            if (! installer.replaceWithData (response.data.getData(), response.data.getSize()))
+#if JUCE_LINUX
+            const auto runningApp = File::getSpecialLocation (File::currentExecutableFile);
+            updateFile = runningApp.getParentDirectory().getNonexistentChildFile ("LightHostUpdate", ".bin");
+#elif JUCE_MAC
+            updateFile = File::getSpecialLocation (File::tempDirectory)
+                             .getNonexistentChildFile ("LightHostUpdate", ".zip");
+#else
+            updateFile = File::getSpecialLocation (File::tempDirectory)
+                             .getNonexistentChildFile ("LightHostSetup", ".exe");
+#endif
+            if (! updateFile.replaceWithData (response.data.getData(), response.data.getSize()))
             {
-                response.error = "Could not write the downloaded installer to the temporary directory.";
-                installer.deleteFile();
+                response.error = "Could not write the downloaded update to disk.";
+                updateFile.deleteFile();
             }
         }
-        MessageManager::callAsync ([safeThis, installer, version, error = response.error]
+        MessageManager::callAsync ([safeThis, updateFile, version, platform, error = response.error]
         {
             if (safeThis == nullptr)
             {
-                if (installer != File()) installer.deleteFile();
+                if (updateFile != File()) updateFile.deleteFile();
                 return;
             }
             safeThis->updateInProgress = false;
@@ -1716,18 +1674,19 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
                 showErrorWithDiagnostics ("Update download failed", error);
                 return;
             }
+#if JUCE_WINDOWS
             AlertWindow::showAsync (MessageBoxOptions()
                 .withIconType (MessageBoxIconType::QuestionIcon)
                 .withTitle ("Install Light Host update?")
                 .withMessage ("Version " + version + " was downloaded and verified. "
                               "Run its installer now? Light Host will close.")
                 .withButton ("Run installer", 1).withButton ("Not now", 0),
-                [installer] (int result)
+                [updateFile] (int result)
                 {
                     if (result != 1)
                     {
-                        if (! installer.deleteFile())
-                            showErrorWithDiagnostics ("Could not remove downloaded installer", installer.getFullPathName());
+                        if (! updateFile.deleteFile())
+                            showErrorWithDiagnostics ("Could not remove downloaded installer", updateFile.getFullPathName());
                     }
                     else
                     {
@@ -1736,17 +1695,64 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
                         const auto arguments = "--directory \""
                                              + installDirectory.getFullPathName().replace ("\"", "\\\"")
                                              + "\"";
-                        if (installer.startAsProcess (arguments))
+                        if (updateFile.startAsProcess (arguments))
                             JUCEApplication::getInstance()->quit();
                         else
                         {
-                            showErrorWithDiagnostics ("Could not start installer", installer.getFullPathName());
-                            if (! installer.deleteFile())
+                            showErrorWithDiagnostics ("Could not start installer", updateFile.getFullPathName());
+                            if (! updateFile.deleteFile())
                                 showErrorWithDiagnostics ("Could not remove downloaded installer",
-                                                          installer.getFullPathName());
+                                                          updateFile.getFullPathName());
                         }
                     }
                 });
+#else
+            const auto runningApp = File::getSpecialLocation (File::currentExecutableFile);
+            const auto helper = runningApp.getSiblingFile ("LightHostUpdater");
+            if (! helper.existsAsFile())
+            {
+                showErrorWithDiagnostics ("Update helper unavailable",
+                                          "The platform updater is missing beside the application: "
+                                              + helper.getFullPathName());
+                updateFile.deleteFile();
+                return;
+            }
+            const auto status = updateStatusFile();
+#if JUCE_LINUX
+            const auto mode = "--linux";
+            const auto target = runningApp;
+            const auto warning = "The app must be in a writable folder. Light Host will close and reopen to apply the update.";
+#else
+            const auto mode = "--mac";
+            const auto target = runningApp.getParentDirectory().getParentDirectory().getParentDirectory();
+            const auto warning = "Light Host will close and reopen to apply the update. macOS may block this unsigned app until it is signed and notarized.";
+#endif
+            const std::vector<String> arguments { mode, String ((int64) getpid()),
+                                                  updateFile.getFullPathName(), target.getFullPathName(),
+                                                  status.getFullPathName() };
+            AlertWindow::showAsync (MessageBoxOptions()
+                .withIconType (MessageBoxIconType::QuestionIcon)
+                .withTitle ("Install Light Host update?")
+                .withMessage ("Version " + version + " was downloaded and its SHA-256 verified. " + warning)
+                .withButton ("Install and restart", 1).withButton ("Not now", 0),
+                [helper, arguments, updateFile] (int result)
+                {
+                    if (result != 1)
+                    {
+                        if (! updateFile.deleteFile())
+                            showErrorWithDiagnostics ("Could not remove downloaded update", updateFile.getFullPathName());
+                        return;
+                    }
+                    if (launchUpdateHelper (helper, arguments))
+                        JUCEApplication::getInstance()->quit();
+                    else
+                    {
+                        showErrorWithDiagnostics ("Could not start update helper", helper.getFullPathName());
+                        if (! updateFile.deleteFile())
+                            showErrorWithDiagnostics ("Could not remove downloaded update", updateFile.getFullPathName());
+                    }
+                });
+#endif
         });
     }))
     {
@@ -1754,7 +1760,6 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
         showErrorWithDiagnostics ("Update download failed", "Could not start the update worker.");
     }
 }
-#endif
 
 void IconMenu::locatePlugin (ActivePlugin plugin)
 {

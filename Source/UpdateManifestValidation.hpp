@@ -28,7 +28,7 @@ inline bool isNewerLightHostVersion (const int (&candidate)[3], const int (&curr
     return false;
 }
 
-inline bool isValidLightHostInstallerUrl (const juce::String& address)
+inline bool isValidLightHostReleaseAssetUrl (const juce::String& address)
 {
     const juce::String prefix = "https://github.com/Anna-Spanner/LightHost/releases/download/";
     if (! address.startsWith (prefix))
