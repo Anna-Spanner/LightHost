@@ -90,7 +90,7 @@ otherwise pass `-DJUCE_DIR=<path to JUCE>`.
 ```
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --target LightHost
-```.
+```
 
 The app is written to `build\LightHost_artefacts\Release\Light Host.exe`.
 `LightHost.jucer` is the legacy JUCE 4 project and is no longer used for building.
