@@ -133,7 +133,7 @@ in use or the desktop does not support it.
 If a saved plugin cannot load, Light Host reports the reason and keeps its saved
 state. Reinstall missing plugins at their original locations, or scan for them
 again in **Edit Plugins**. If a plugin has moved, use **Active Plugins > [plugin]
-> Locate plugin...** and choose its new file or VST3 bundle. Light Host checks
+\> Locate plugin...** and choose its new file or VST3 bundle. Light Host checks
 that it loads and matches the saved plugin before changing its location. A VST3
 replacement for a VST2 plugin may not accept the old plugin's settings, so
 keep a backup of your settings before changing it.
