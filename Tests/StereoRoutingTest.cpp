@@ -5,6 +5,13 @@
 #include <cmath>
 #include <iostream>
 
+namespace vst2Compat
+{
+#include "../VST2Compat/pluginterfaces/vst2.x/juce_VSTInterface.h"
+}
+
+static_assert (vst2Compat::effEditTop == 20, "VST2 editor top opcode must match the plugin ABI");
+
 class GainProcessor : public juce::AudioProcessor
 {
 public:

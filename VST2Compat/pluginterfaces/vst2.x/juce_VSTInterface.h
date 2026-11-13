@@ -262,6 +262,7 @@ enum VstHostToPlugInOpcodes
     , effConnectInput = plugInOpcodeConnectInput
     , effConnectOutput = plugInOpcodeConnectOutput
     , effEditIdle = plugInOpcodeEditorIdle
+    , effEditTop = plugInOpcodeeffEditorTop
     , effIdle = plugInOpcodeIdle
     , effShellGetNextPlugin = plugInOpcodeNextPlugInUniqueID
     , effStartProcess = plugInOpcodeStartProcess

@@ -1,6 +1,8 @@
 #if defined(__linux__)
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
+#elif defined(__APPLE__)
+#include <Carbon/Carbon.h>
 #endif
 
 #include "GlobalBypassShortcut.hpp"
@@ -11,8 +13,6 @@
 
 #if JUCE_WINDOWS
 #include <Windows.h>
-#elif JUCE_MAC
-#include <Carbon/Carbon.h>
 #elif JUCE_LINUX
 #include <cstdlib>
 #endif
